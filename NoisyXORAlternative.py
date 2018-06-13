@@ -21,7 +21,7 @@ number_of_classes = 2
 
 # Training configuration
 epochs = 2000
-starting_epsilon = 0.5
+starting_epsilon = 0.25
 batch_size = 32
 starting_learning_rate = 0.005
 final_learning_rate = 0.001
