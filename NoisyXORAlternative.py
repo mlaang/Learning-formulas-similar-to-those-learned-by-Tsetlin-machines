@@ -1,9 +1,7 @@
 # This computes formulas similar to those computed by Tsetlin machines for a noisy XOR problem.
-# With the current parameters it achieves around 70% test accuracy,
-# but parameters are not carefully tuned and during experimentation
-# some gave accuracies of 82%. This is much worse than Tsetlin machines
-# and worse than the neural network baseline in the Tsetlin machine paper, but
-# the lower of these is better than an SVM on this problem.
+# With the current parameters it achieves around 97.17% test accuracy. This is much worse than Tsetlin machines
+# and almost the same as the neural network baseline in the Tsetlin machine paper, but
+# the lower of these is better than an SVM on this problem. The highest result of ten runs was 100.0%.
 #
 # The dataset this is intended for is that supplied with Granmo's demonstration
 # implementation of Tsetlin machines, which can be found here: https://github.com/cair/TsetlinMachine
@@ -20,13 +18,13 @@ number_of_features = 12
 number_of_classes = 2
 
 # Training configuration
-epochs = 2000
 starting_epsilon = 0.25
+epochs = 300#2000
 batch_size = 32
-starting_learning_rate = 0.005
+starting_learning_rate = 0.005	
 final_learning_rate = 0.001
 starting_discretization_importance = 0.0
-final_discretization_importance = 0.1
+final_discretization_importance = 0.2
 
 # Loading of training and test data
 training_data = np.loadtxt("NoisyXORTrainingData.txt").astype(dtype=np.int32)
@@ -45,13 +43,15 @@ discretization_importance = tf.placeholder(tf.float32, [])
 
 parameters = {	
     'W': tf.Variable(tf.random_uniform([number_of_classes, number_of_clauses, number_of_features], dtype=tf.float32)),
-    'V': tf.Variable(tf.random_uniform([number_of_classes, number_of_clauses, number_of_features], dtype=tf.float32))
+    'V': tf.Variable(tf.random_uniform([number_of_classes, number_of_clauses, number_of_features], dtype=tf.float32)),
+	'U': tf.Variable(tf.random_uniform([number_of_classes, number_of_clauses, number_of_features], dtype=tf.float32))
 }
 
 def discretize(params):
     dict = {
         'W': tf.round(params['W']),
-        'V': tf.round(params['V'])
+        'V': tf.round(params['V']),
+		'U': tf.round(params['U'])
     }
     return dict
 
@@ -70,29 +70,32 @@ learning_rate = tf.placeholder(tf.float32, [])
 #
 # We thus compute
 #
-# sigmoid(\sum_{i=1}^n (-1)^i \prod_j (x_j + \epsilon)^{W_kij} (1-x_j + \epsilon)^((1 - W_kij)U_kij)) for k={1,2}
+# sigmoid(\sum_{i=1}^n (-1)^i \prod_j (x_j + \epsilon)^{W_kij U_kij} (1-x_j + \epsilon)^((1 - W_kij)V_kij)) for k={1,2}
 #
 # where n is the number of clauses. To avoid making this needlessly computation intensive we use logarithms:
 #
-# sigmoid(\sum_{i=1}^n (-1)^i exp(\sum_j W_kij log(x_j + \epsilon) + \sum_j (1 - W_kij)U_kij log(1- x_j + \epsilon))).
+# sigmoid(\sum_{i=1}^n (-1)^i exp(\sum_j W_kij U_kij log(x_j + \epsilon) + \sum_j (1 - W_kij)V_kij log(1- x_j + \epsilon))).
 
 def model_fn(x, params):
-    x_transformed          = tf.log(tf.add(x, epsilon))
-    x_transformed_negative = tf.log(tf.add(1-x, epsilon))
-    negative_clause_sums   = tf.einsum('ijk,lk->lij', tf.multiply((1-tf.abs(params['W'])),params['V']), x_transformed_negative)
-    positive_clause_sums   = tf.einsum('ijk,lk->lij', tf.abs(params['W']), x_transformed)
+    x_transformed          = tf.log(x + epsilon)
+    x_transformed_negative = tf.log(1 - x + epsilon)
+    negative_clause_sums   = tf.einsum('ijk,lk->lij', tf.multiply((1-tf.abs(params['W'])),tf.abs(params['V'])), x_transformed_negative)
+    positive_clause_sums   = tf.einsum('ijk,lk->lij', tf.multiply(tf.abs(params['W']),tf.abs(params['U'])), x_transformed)
     clause_outputs         = tf.exp(tf.add(negative_clause_sums, positive_clause_sums))
     return tf.sigmoid(tf.einsum('j,lij->li', tf.constant(np.tile([-1.0,1.0],number_of_clauses//2).tolist()), clause_outputs))
+	
+def non_discreteness(X):
+    return tf.reduce_sum(tf.abs(X) + tf.abs(X-1) - tf.abs(X-0.5))
 
-discretization_error = tf.reduce_sum(tf.abs(parameters['W'])+tf.abs(tf.add(parameters['W'],-1))-tf.abs(tf.add(parameters['W'],-0.5)) + tf.abs(parameters['V'])+tf.abs(tf.add(parameters['V'],-1))-tf.abs(tf.add(parameters['V'],-0.5)))
-underlying_cost = tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits_v2(logits=model_fn(x, parameters), labels=y))
+discretization_error = non_discreteness(parameters['W']) + 0.5*non_discreteness(parameters['V']) + 0.5*non_discreteness(parameters['U'])
+underlying_cost = tf.reduce_sum(tf.nn.sigmoid_cross_entropy_with_logits(logits=model_fn(x, parameters), labels=y))
 cost = underlying_cost + discretization_error*discretization_importance
 
 def accuracy(x, y, params):
     correct_pred = tf.equal(tf.argmax(model_fn(x, params), 1), tf.argmax(y, 1))
     return tf.reduce_mean(tf.cast(correct_pred, tf.float32))
 
-optimizer = tf.train.GradientDescentOptimizer(learning_rate).minimize(cost)
+optimizer = tf.train.MomentumOptimizer(learning_rate,0.90).minimize(cost)
 
 sess = tf.Session()
 sess.run(tf.global_variables_initializer())
